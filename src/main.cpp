@@ -7,96 +7,183 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include "DHTesp.h"
 
 #define SCREEN_WIDTH 128 
 #define SCREEN_HEIGHT 64 
-
-// Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
 #define OLED_RESET     0 // Reset pin # (or -1 if sharing Arduino reset pin)
+
 Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-
-#include "DHTesp.h"
-
-#ifdef ESP32
-#pragma message(THIS EXAMPLE IS FOR ESP8266 ONLY!)
-#error Select ESP8266 board.
-#endif
-
 SimpleTimer timer;
+DHTesp dht;
+
 char auth[] = "ONSxsBUvzdBn5-SES-ZZfEKUuziaaPID";
 char ssid[] = "Ziggo8655252";
 char pass[] = "nyDgvy7H6smv";
-float t;
-float h;
 
-int red_light_pin= D6;
-int green_light_pin = D5;
-int blue_light_pin = D0;
+const long THRESHOLD_1 = 1;
+const long THRESHOLD_2 = 4;
+const long THRESHOLD_3 = 7;
 
-DHTesp dht;
+const int H1_PIN= D0;
+const int H2_PIN= D5;
+const int H3_PIN= D6;
+const int H4_PIN= D7;
+const int TEMP_PIN= D4;
+const int BTN_PIN= D8;
 
-void RGB_color(int red_light_value, int green_light_value, int blue_light_value)
- {
-  analogWrite(red_light_pin, red_light_value);
-  analogWrite(green_light_pin, green_light_value);
-  analogWrite(blue_light_pin, blue_light_value);
+long TEMP_MAX = 60;
+int buttonState = 0;  
+long randTemp = 0;
+int totalTimeInMinutes = 10;
+long startMillis = -1;
+float temp = -1;
+float humidity = -1;
+boolean off = true;
+boolean maxReached = false;
+
+
+void readTemperature()
+{
+  humidity = dht.getHumidity();
+  temp = dht.getTemperature();
+
+  Blynk.virtualWrite(V0, temp);
+  Blynk.virtualWrite(V1, humidity); 
+
+  off = false;
 }
 
-void sendUptime()
-{
-  RGB_color(255, 0, 0);
+void switchHeaters(int h1, int h2, int h3, int h4)
+ {
+  digitalWrite(H1_PIN, h1);
+  digitalWrite(H2_PIN, h2);
+  digitalWrite(H3_PIN, h3);
+  digitalWrite(H4_PIN, h4);
+}
 
-  float h = dht.getHumidity();
-  float t = dht.getTemperature();
-  Serial.println("Humidity and temperature\n\n");
-  Serial.print("Current humidity = ");
-  Serial.print(h);
-  Serial.print("%  ");
-  Serial.print("temperature = ");
-  Serial.print(t); 
-  Blynk.virtualWrite(V0, t);
-  Blynk.virtualWrite(V1, h); 
+void adjustHeaters(){
+  buttonState = digitalRead(BTN_PIN);
+  if (buttonState == HIGH) {
+    randTemp = random(50, 70);
+    Serial.println("-----");
+    Serial.print("TEMP: ");
+    Serial.println(randTemp);
+  }
 
+  if (!maxReached){
+      maxReached = randTemp >= TEMP_MAX;
+     switchHeaters(1, 1, 1, 1);        
+  }
+
+  if (maxReached && randTemp > TEMP_MAX)
+  {
+    long overTemp = randTemp - TEMP_MAX;
+    Serial.print("OVER: ");
+    Serial.println(overTemp);
+    if (overTemp < THRESHOLD_2)
+    {
+      switchHeaters(1, 0, 1, 0);
+    }
+    else
+    {
+      switchHeaters(0, 0, 0, 0);
+    }
+  }
+  else if (maxReached && randTemp < TEMP_MAX)
+  {
+    long underTemp = TEMP_MAX - randTemp;
+    Serial.print("UNDER: ");
+    Serial.println(underTemp);
+    if (underTemp <= THRESHOLD_1){
+      switchHeaters(1, 0, 0, 0);
+    }
+    else if (underTemp > THRESHOLD_1 && underTemp <= THRESHOLD_2){
+      switchHeaters(1, 1, 0, 0);
+    }
+    else if (underTemp > THRESHOLD_2 && underTemp <= THRESHOLD_3){
+      switchHeaters(1, 1, 1, 0);
+    }
+    else {
+       switchHeaters(1, 1, 1, 1);
+    }
+  }
+}
+
+
+void updateTimer(){
+
+}
+
+void refreshDisplay(){
   oled.clearDisplay();
 
-  oled.setTextColor(WHITE);        
-  oled.setTextSize(3);             
-  oled.setCursor(5,20);            
-  oled.println((int)t);
+  //initializing
+  if (off){
+    oled.setTextSize(1);
+    oled.setTextColor(WHITE);
+    oled.setCursor(20,25);
+    oled.println("Intializing...");
+    oled.display(); 
+  }
+  else{
+    //temperature  
+    oled.setTextColor(WHITE);        
+    oled.setTextSize(3);             
+    oled.setCursor(5,10);            
+    oled.println((int)temp);
+    oled.drawCircle(45, 12, 1, WHITE);
+    oled.setTextSize(1);             
+    oled.setCursor(46,12);            
+    oled.println("C");
 
-  oled.setTextColor(WHITE);        
-  oled.setTextSize(2);             
-  oled.setCursor(40,20);            
-  oled.println("C");
-  oled.display(); 
+    //humidity
+    oled.setCursor(80,10);            
+    oled.setTextSize(3);
+    oled.println((int)humidity);
+    oled.setTextSize(1);             
+    
+    oled.setCursor(80,12);            
+    oled.drawCircle(120, 12, 1, WHITE);
+    oled.setTextSize(1);             
+    oled.setCursor(120,12);            
+    oled.println("/");
+    oled.drawCircle(123, 18, 1, WHITE);
+
+    //timer
+    oled.setTextColor(INVERSE);        
+    oled.setTextSize(3);             
+    oled.setCursor(15,43);            
+    oled.println("12:30");
+
+    oled.display(); 
+  }
 }
 
 void setup()
 {
   Serial.begin(115200);
   Blynk.begin(auth, ssid, pass);
-  dht.setup(D4, DHTesp::DHT11);
-  timer.setInterval(2000, sendUptime);
 
-  pinMode(red_light_pin, OUTPUT);
-  pinMode(green_light_pin, OUTPUT);
-  pinMode(blue_light_pin, OUTPUT);
+  dht.setup(TEMP_PIN, DHTesp::DHT11);
+
+  pinMode(H1_PIN, OUTPUT);
+  pinMode(H2_PIN, OUTPUT);
+  pinMode(H3_PIN, OUTPUT);
+  pinMode(H4_PIN, OUTPUT);
+  pinMode(BTN_PIN, INPUT);
 
   if(!oled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("SSD1306 allocation failed"));
-    for(;;); // Don't proceed, loop forever
+    for(;;); 
   }
+  refreshDisplay();
 
-  oled.clearDisplay();
-  oled.setTextSize(1);
-  oled.setTextColor(WHITE);
-  oled.setCursor(20,25);
-  oled.println("Intializing...");
- 
-  oled.display(); 
+  timer.setInterval(2000, readTemperature);
+  timer.setInterval(1000, refreshDisplay);
+  // timer.setInterval(1000, updateTimer);
+  // timer.setInterval(10000, adjustHeaters);
 
-  Serial.println();
-  Serial.println("Status\tHumidity (%)\tTemperature (C)\t(F)\tHeatIndex (C)\t(F)");
 }
 
 void loop()
@@ -104,426 +191,3 @@ void loop()
   Blynk.run();
   timer.run();
 }
-
-//=====================================================================================================================================================================================================
-
-
-
-// #include <SPI.h>
-// #include <Wire.h>
-// #include <Adafruit_GFX.h>
-// #include <Adafruit_SSD1306.h>
-
-// #define SCREEN_WIDTH 128 // OLED display width, in pixels
-// #define SCREEN_HEIGHT 64 // OLED display height, in pixels
-
-// // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
-// #define OLED_RESET     0 // Reset pin # (or -1 if sharing Arduino reset pin)
-// Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-
-// #define NUMFLAKES     10 // Number of snowflakes in the animation example
-
-// #define LOGO_HEIGHT   16
-// #define LOGO_WIDTH    16
-// static const unsigned char PROGMEM logo_bmp[] =
-// { B00000000, B11000000,
-//   B00000001, B11000000,
-//   B00000001, B11000000,
-//   B00000011, B11100000,
-//   B11110011, B11100000,
-//   B11111110, B11111000,
-//   B01111110, B11111111,
-//   B00110011, B10011111,
-//   B00011111, B11111100,
-//   B00001101, B01110000,
-//   B00011011, B10100000,
-//   B00111111, B11100000,
-//   B00111111, B11110000,
-//   B01111100, B11110000,
-//   B01110000, B01110000,
-//   B00000000, B00110000 };
-
-
-// void testdrawline() {
-//   int16_t i;
-
-//   display.clearDisplay(); // Clear display buffer
-
-//   for(i=0; i<display.width(); i+=4) {
-//     display.drawLine(0, 0, i, display.height()-1, SSD1306_WHITE);
-//     display.display(); // Update screen with each newly-drawn line
-//     delay(1);
-//   }
-//   for(i=0; i<display.height(); i+=4) {
-//     display.drawLine(0, 0, display.width()-1, i, SSD1306_WHITE);
-//     display.display();
-//     delay(1);
-//   }
-//   delay(250);
-
-//   display.clearDisplay();
-
-//   for(i=0; i<display.width(); i+=4) {
-//     display.drawLine(0, display.height()-1, i, 0, SSD1306_WHITE);
-//     display.display();
-//     delay(1);
-//   }
-//   for(i=display.height()-1; i>=0; i-=4) {
-//     display.drawLine(0, display.height()-1, display.width()-1, i, SSD1306_WHITE);
-//     display.display();
-//     delay(1);
-//   }
-//   delay(250);
-
-//   display.clearDisplay();
-
-//   for(i=display.width()-1; i>=0; i-=4) {
-//     display.drawLine(display.width()-1, display.height()-1, i, 0, SSD1306_WHITE);
-//     display.display();
-//     delay(1);
-//   }
-//   for(i=display.height()-1; i>=0; i-=4) {
-//     display.drawLine(display.width()-1, display.height()-1, 0, i, SSD1306_WHITE);
-//     display.display();
-//     delay(1);
-//   }
-//   delay(250);
-
-//   display.clearDisplay();
-
-//   for(i=0; i<display.height(); i+=4) {
-//     display.drawLine(display.width()-1, 0, 0, i, SSD1306_WHITE);
-//     display.display();
-//     delay(1);
-//   }
-//   for(i=0; i<display.width(); i+=4) {
-//     display.drawLine(display.width()-1, 0, i, display.height()-1, SSD1306_WHITE);
-//     display.display();
-//     delay(1);
-//   }
-
-//   delay(2000); // Pause for 2 seconds
-// }
-
-// void testdrawrect(void) {
-//   display.clearDisplay();
-
-//   for(int16_t i=0; i<display.height()/2; i+=2) {
-//     display.drawRect(i, i, display.width()-2*i, display.height()-2*i, SSD1306_WHITE);
-//     display.display(); // Update screen with each newly-drawn rectangle
-//     delay(1);
-//   }
-
-//   delay(2000);
-// }
-
-// void testfillrect(void) {
-//   display.clearDisplay();
-
-//   for(int16_t i=0; i<display.height()/2; i+=3) {
-//     // The INVERSE color is used so rectangles alternate white/black
-//     display.fillRect(i, i, display.width()-i*2, display.height()-i*2, SSD1306_INVERSE);
-//     display.display(); // Update screen with each newly-drawn rectangle
-//     delay(1);
-//   }
-
-//   delay(2000);
-// }
-
-// void testdrawcircle(void) {
-//   display.clearDisplay();
-
-//   for(int16_t i=0; i<max(display.width(),display.height())/2; i+=2) {
-//     display.drawCircle(display.width()/2, display.height()/2, i, SSD1306_WHITE);
-//     display.display();
-//     delay(1);
-//   }
-
-//   delay(2000);
-// }
-
-// void testfillcircle(void) {
-//   display.clearDisplay();
-
-//   for(int16_t i=max(display.width(),display.height())/2; i>0; i-=3) {
-//     // The INVERSE color is used so circles alternate white/black
-//     display.fillCircle(display.width() / 2, display.height() / 2, i, SSD1306_INVERSE);
-//     display.display(); // Update screen with each newly-drawn circle
-//     delay(1);
-//   }
-
-//   delay(2000);
-// }
-
-// void testdrawroundrect(void) {
-//   display.clearDisplay();
-
-//   for(int16_t i=0; i<display.height()/2-2; i+=2) {
-//     display.drawRoundRect(i, i, display.width()-2*i, display.height()-2*i,
-//       display.height()/4, SSD1306_WHITE);
-//     display.display();
-//     delay(1);
-//   }
-
-//   delay(2000);
-// }
-
-// void testfillroundrect(void) {
-//   display.clearDisplay();
-
-//   for(int16_t i=0; i<display.height()/2-2; i+=2) {
-//     // The INVERSE color is used so round-rects alternate white/black
-//     display.fillRoundRect(i, i, display.width()-2*i, display.height()-2*i,
-//       display.height()/4, SSD1306_INVERSE);
-//     display.display();
-//     delay(1);
-//   }
-
-//   delay(2000);
-// }
-
-// void testdrawtriangle(void) {
-//   display.clearDisplay();
-
-//   for(int16_t i=0; i<max(display.width(),display.height())/2; i+=5) {
-//     display.drawTriangle(
-//       display.width()/2  , display.height()/2-i,
-//       display.width()/2-i, display.height()/2+i,
-//       display.width()/2+i, display.height()/2+i, SSD1306_WHITE);
-//     display.display();
-//     delay(1);
-//   }
-
-//   delay(2000);
-// }
-
-// void testfilltriangle(void) {
-//   display.clearDisplay();
-
-//   for(int16_t i=max(display.width(),display.height())/2; i>0; i-=5) {
-//     // The INVERSE color is used so triangles alternate white/black
-//     display.fillTriangle(
-//       display.width()/2  , display.height()/2-i,
-//       display.width()/2-i, display.height()/2+i,
-//       display.width()/2+i, display.height()/2+i, SSD1306_INVERSE);
-//     display.display();
-//     delay(1);
-//   }
-
-//   delay(2000);
-// }
-
-// void testdrawchar(void) {
-//   display.clearDisplay();
-
-//   display.setTextSize(1);      // Normal 1:1 pixel scale
-//   display.setTextColor(SSD1306_WHITE); // Draw white text
-//   display.setCursor(0, 0);     // Start at top-left corner
-//   display.cp437(true);         // Use full 256 char 'Code Page 437' font
-
-//   // Not all the characters will fit on the display. This is normal.
-//   // Library will draw what it can and the rest will be clipped.
-//   for(int16_t i=0; i<256; i++) {
-//     if(i == '\n') display.write(' ');
-//     else          display.write(i);
-//   }
-
-//   display.display();
-//   delay(2000);
-// }
-
-// void testdrawstyles(void) {
-//   display.clearDisplay();
-
-//   display.setTextSize(1);             // Normal 1:1 pixel scale
-//   display.setTextColor(SSD1306_WHITE);        // Draw white text
-//   display.setCursor(0,0);             // Start at top-left corner
-//   display.println(F("Hello, world!"));
-
-//   display.setTextColor(SSD1306_BLACK, SSD1306_WHITE); // Draw 'inverse' text
-//   display.println(3.141592);
-
-//   display.setTextSize(2);             // Draw 2X-scale text
-//   display.setTextColor(SSD1306_WHITE);
-//   display.print(F("0x")); display.println(0xDEADBEEF, HEX);
-
-//   display.display();
-//   delay(2000);
-// }
-
-// void testscrolltext(void) {
-//   display.clearDisplay();
-
-//   display.setTextSize(2); // Draw 2X-scale text
-//   display.setTextColor(SSD1306_WHITE);
-//   display.setCursor(10, 0);
-//   display.println(F("scroll"));
-//   display.display();      // Show initial text
-//   delay(100);
-
-//   // Scroll in various directions, pausing in-between:
-//   display.startscrollright(0x00, 0x0F);
-//   delay(2000);
-//   display.stopscroll();
-//   delay(1000);
-//   display.startscrollleft(0x00, 0x0F);
-//   delay(2000);
-//   display.stopscroll();
-//   delay(1000);
-//   display.startscrolldiagright(0x00, 0x07);
-//   delay(2000);
-//   display.startscrolldiagleft(0x00, 0x07);
-//   delay(2000);
-//   display.stopscroll();
-//   delay(1000);
-// }
-
-// void testdrawbitmap(void) {
-//   display.clearDisplay();
-
-//   display.drawBitmap(
-//     (display.width()  - LOGO_WIDTH ) / 2,
-//     (display.height() - LOGO_HEIGHT) / 2,
-//     logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, 1);
-//   display.display();
-//   delay(1000);
-// }
-
-// #define XPOS   0 // Indexes into the 'icons' array in function below
-// #define YPOS   1
-// #define DELTAY 2
-
-// void testanimate(const uint8_t *bitmap, uint8_t w, uint8_t h) {
-//   int8_t f, icons[NUMFLAKES][3];
-
-//   // Initialize 'snowflake' positions
-//   for(f=0; f< NUMFLAKES; f++) {
-//     icons[f][XPOS]   = random(1 - LOGO_WIDTH, display.width());
-//     icons[f][YPOS]   = -LOGO_HEIGHT;
-//     icons[f][DELTAY] = random(1, 6);
-//     Serial.print(F("x: "));
-//     Serial.print(icons[f][XPOS], DEC);
-//     Serial.print(F(" y: "));
-//     Serial.print(icons[f][YPOS], DEC);
-//     Serial.print(F(" dy: "));
-//     Serial.println(icons[f][DELTAY], DEC);
-//   }
-
-//   for(;;) { // Loop forever...
-//     display.clearDisplay(); // Clear the display buffer
-
-//     // Draw each snowflake:
-//     for(f=0; f< NUMFLAKES; f++) {
-//       display.drawBitmap(icons[f][XPOS], icons[f][YPOS], bitmap, w, h, SSD1306_WHITE);
-//     }
-
-//     display.display(); // Show the display buffer on the screen
-//     delay(200);        // Pause for 1/10 second
-
-//     // Then update coordinates of each flake...
-//     for(f=0; f< NUMFLAKES; f++) {
-//       icons[f][YPOS] += icons[f][DELTAY];
-//       // If snowflake is off the bottom of the screen...
-//       if (icons[f][YPOS] >= display.height()) {
-//         // Reinitialize to a random position, just off the top
-//         icons[f][XPOS]   = random(1 - LOGO_WIDTH, display.width());
-//         icons[f][YPOS]   = -LOGO_HEIGHT;
-//         icons[f][DELTAY] = random(1, 6);
-//       }
-//     }
-//   }
-// }
-
-
-// void setup() {
-//   Serial.begin(115200);
-
-//   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
-//   if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
-//     Serial.println(F("SSD1306 allocation failed"));
-//     for(;;); // Don't proceed, loop forever
-//   }
-
-
-
-//   // Clear the buffer
-//   display.clearDisplay();
-
-//   // Draw a single pixel in white
-//   display.drawPixel(10, 10, SSD1306_WHITE);
-
-//   // Show the display buffer on the screen. You MUST call display() after
-//   // drawing commands to make them visible on screen!
-//   display.display();
-//   delay(2000);
-//   // display.display() is NOT necessary after every single drawing command,
-//   // unless that's what you want...rather, you can batch up a bunch of
-//   // drawing operations and then update the screen all at once by calling
-//   // display.display(). These examples demonstrate both approaches...
-
-//   testdrawline();      // Draw many lines
-
-//   testdrawrect();      // Draw rectangles (outlines)
-
-//   testfillrect();      // Draw rectangles (filled)
-
-//   testdrawcircle();    // Draw circles (outlines)
-
-//   testfillcircle();    // Draw circles (filled)
-
-//   testdrawroundrect(); // Draw rounded rectangles (outlines)
-
-//   testfillroundrect(); // Draw rounded rectangles (filled)
-
-//   testdrawtriangle();  // Draw triangles (outlines)
-
-//   testfilltriangle();  // Draw triangles (filled)
-
-//   testdrawchar();      // Draw characters of the default font
-
-//   testdrawstyles();    // Draw 'stylized' characters
-
-//   testscrolltext();    // Draw scrolling text
-
-//   testdrawbitmap();    // Draw a small bitmap image
-
-//   // Invert and restore display, pausing in-between
-//   display.invertDisplay(true);
-//   delay(1000);
-//   display.invertDisplay(false);
-//   delay(1000);
-
-//   testanimate(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT); // Animate bitmaps
-// }
-
-// void loop() {
-
-// }
-
-
-//=====================================================================================================================================================================================================
-
-
-// #include <Adafruit_GFX.h>
-// #include <Adafruit_SSD1306.h>
-
-// #define OLED_RESET 0  // GPIO0
-// Adafruit_SSD1306 OLED(OLED_RESET);
- 
-// void setup()   {
-//   OLED.begin();
-//   OLED.clearDisplay();
-
-//   //Add stuff into the 'display buffer'
-//   OLED.setTextWrap(false);
-//   OLED.setTextSize(1);
-//   OLED.setTextColor(WHITE);
-//   OLED.setCursor(0,0);
-//   OLED.println("automatedhome.party");
- 
-//   OLED.display(); //output 'display buffer' to screen  
-//   OLED.startscrollleft(0x00, 0x0F); //make display scroll 
-// } 
- 
-// void loop() {
-// }
