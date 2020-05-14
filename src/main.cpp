@@ -24,6 +24,10 @@ char pass[] = "nyDgvy7H6smv";
 const long THRESHOLD_1 = 1;
 const long THRESHOLD_2 = 4;
 const long THRESHOLD_3 = 7;
+const long MAX_TEMP = 60;
+const long MAX_TIME = 45 * 60;
+const long DEFAULT_WARMUP_TIME_IN_MINS = 5;
+const long WARMUP_TEMP_THRESHOLD = 40;
 
 const int H1_PIN= D0;
 const int H2_PIN= D5;
@@ -32,15 +36,46 @@ const int H4_PIN= D7;
 const int TEMP_PIN= D4;
 const int BTN_PIN= D8;
 
-long TEMP_MAX = 60;
-int buttonState = 0;  
-long randTemp = 0;
-int totalTimeInMinutes = 10;
-long startMillis = -1;
+int maxTemp = MAX_TEMP;
+long totalTimeInSeconds = MAX_TIME;
+long timeRemainingInSeconds = totalTimeInSeconds;
+long warmUptimeRemainingInSeconds = 30;//WARMUP_TIME * 60;
+String displayTimeRemaining;
+
+
 float temp = -1;
 float humidity = -1;
-boolean off = true;
+int statusOn = 1;
+boolean warmedUp = false;
 boolean maxReached = false;
+
+BLYNK_WRITE(V2)
+{
+  maxTemp = param.asInt(); 
+}
+
+BLYNK_WRITE(V4)
+{
+  statusOn = param.asInt(); 
+  Serial.println("off: " + statusOn);
+  if (statusOn == 0){
+    timeRemainingInSeconds = 0;
+  }
+  else {
+     timeRemainingInSeconds = totalTimeInSeconds; 
+  }
+}
+
+BLYNK_WRITE(V5)
+{
+  timeRemainingInSeconds =  param.asInt() * 60;
+}
+
+BLYNK_CONNECTED() {
+  Blynk.virtualWrite(V5, MAX_TIME);
+  Blynk.virtualWrite(V2, maxTemp);
+  Blynk.virtualWrite(V4, statusOn);
+}
 
 
 void readTemperature()
@@ -50,8 +85,6 @@ void readTemperature()
 
   Blynk.virtualWrite(V0, temp);
   Blynk.virtualWrite(V1, humidity); 
-
-  off = false;
 }
 
 void switchHeaters(int h1, int h2, int h3, int h4)
@@ -63,22 +96,28 @@ void switchHeaters(int h1, int h2, int h3, int h4)
 }
 
 void adjustHeaters(){
-  buttonState = digitalRead(BTN_PIN);
+  int buttonState = digitalRead(BTN_PIN);
   if (buttonState == HIGH) {
-    randTemp = random(50, 70);
+    int randTemp = random(50, 70);
+    temp = randTemp;
     Serial.println("-----");
     Serial.print("TEMP: ");
     Serial.println(randTemp);
   }
 
+  if (warmedUp && statusOn == 0){
+    switchHeaters(0, 0, 0, 0);        
+    return;
+  }
+
   if (!maxReached){
-      maxReached = randTemp >= TEMP_MAX;
+      maxReached = temp >= maxTemp;
      switchHeaters(1, 1, 1, 1);        
   }
 
-  if (maxReached && randTemp > TEMP_MAX)
+  if (maxReached && temp > maxTemp)
   {
-    long overTemp = randTemp - TEMP_MAX;
+    long overTemp = temp - maxTemp;
     Serial.print("OVER: ");
     Serial.println(overTemp);
     if (overTemp < THRESHOLD_2)
@@ -90,9 +129,9 @@ void adjustHeaters(){
       switchHeaters(0, 0, 0, 0);
     }
   }
-  else if (maxReached && randTemp < TEMP_MAX)
+  else if (maxReached && temp < maxTemp)
   {
-    long underTemp = TEMP_MAX - randTemp;
+    long underTemp = maxTemp - temp;
     Serial.print("UNDER: ");
     Serial.println(underTemp);
     if (underTemp <= THRESHOLD_1){
@@ -110,23 +149,44 @@ void adjustHeaters(){
   }
 }
 
+String getDisplayTime(int timeInSeconds){
+    int mins = timeInSeconds / 60;
+    int secs = timeInSeconds - (mins*60);
+    return String(mins) + ":" + String(secs);
+}
 
 void updateTimer(){
+  if (!warmedUp){
+    warmUptimeRemainingInSeconds--;
+    displayTimeRemaining = getDisplayTime(warmUptimeRemainingInSeconds);
+    Blynk.virtualWrite(V3, "Warming Up...");
+  }  
+  else if (statusOn == 1 && timeRemainingInSeconds > 0){
+    timeRemainingInSeconds--;
+    displayTimeRemaining = getDisplayTime(timeRemainingInSeconds);
+    
+    Blynk.virtualWrite(V3, getDisplayTime(timeRemainingInSeconds));
+  }
 
+  long timeElapsedInSeconds = totalTimeInSeconds - timeRemainingInSeconds; 
+  Blynk.virtualWrite(V6, getDisplayTime(timeElapsedInSeconds));
 }
 
 void refreshDisplay(){
   oled.clearDisplay();
 
-  //initializing
-  if (off){
+  if (!warmedUp){
     oled.setTextSize(1);
     oled.setTextColor(WHITE);
-    oled.setCursor(20,25);
-    oled.println("Intializing...");
-    oled.display(); 
+    oled.setCursor(20,5);
+    oled.println("Warming up...");
+
+    //timer   
+    oled.setTextSize(3);             
+    oled.setCursor(15,43);            
+    oled.println(displayTimeRemaining);
   }
-  else{
+  else if (statusOn == 1){
     //temperature  
     oled.setTextColor(WHITE);        
     oled.setTextSize(3);             
@@ -150,13 +210,31 @@ void refreshDisplay(){
     oled.println("/");
     oled.drawCircle(123, 18, 1, WHITE);
 
-    //timer
-    oled.setTextColor(INVERSE);        
+      //timer   
     oled.setTextSize(3);             
     oled.setCursor(15,43);            
-    oled.println("12:30");
+    oled.println(displayTimeRemaining);
+  }
 
-    oled.display(); 
+  oled.display(); 
+}
+
+void warmUp(){
+  if (!warmedUp){
+    warmedUp = warmUptimeRemainingInSeconds <= 0 || temp >= WARMUP_TEMP_THRESHOLD;
+    if (warmedUp){
+      Serial.println("warmed up..");
+      warmUptimeRemainingInSeconds = DEFAULT_WARMUP_TIME_IN_MINS * 60;
+      Blynk.virtualWrite(V4, statusOn);
+    }
+  }
+}
+
+void shutDown(){
+  if (timeRemainingInSeconds <= 0){
+      statusOn = 0;
+      Serial.println("shutdown...");
+      Blynk.virtualWrite(V4, statusOn);
   }
 }
 
@@ -181,9 +259,14 @@ void setup()
 
   timer.setInterval(2000, readTemperature);
   timer.setInterval(1000, refreshDisplay);
-  // timer.setInterval(1000, updateTimer);
-  // timer.setInterval(10000, adjustHeaters);
+  timer.setInterval(1000, updateTimer);
+  timer.setInterval(10000, adjustHeaters);
+  timer.setInterval(500, warmUp);
+  timer.setInterval(1000, shutDown);
 
+
+
+  switchHeaters(1,1,1,1);
 }
 
 void loop()
@@ -191,3 +274,4 @@ void loop()
   Blynk.run();
   timer.run();
 }
+
