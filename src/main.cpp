@@ -128,8 +128,14 @@ void adjustHeaters(){
 
 String getDisplayTime(int timeInSeconds){
     int mins = timeInSeconds / 60;
-    int secs = timeInSeconds - (mins*60);
-    return String(mins) + ":" + String(secs);
+    char minsBuf [10];
+    sprintf (minsBuf, "%02d", mins);
+
+    int secs = timeInSeconds - (mins*60);   
+    char secsBuf [10];
+    sprintf (secsBuf, "%02d", secs);
+
+    return String(minsBuf) + ":" + String(secsBuf);
 }
 
 void updateTimer(){
